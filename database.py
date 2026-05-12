@@ -72,6 +72,16 @@ def init_db():
                 FOREIGN KEY (participant_id) REFERENCES participants(id)
             );
 
+            -- 만료된 방 재사용 동의
+            CREATE TABLE IF NOT EXISTS room_consents (
+                room_code   TEXT NOT NULL,
+                user_id     TEXT NOT NULL,
+                consented_at TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (room_code, user_id),
+                FOREIGN KEY (room_code) REFERENCES rooms(code),
+                FOREIGN KEY (user_id)   REFERENCES users(id)
+            );
+
             -- 매주 반복 일정: day_of_week 0=월 1=화 2=수 3=목 4=금 5=토 6=일
             CREATE TABLE IF NOT EXISTS recurring_events (
                 id          TEXT PRIMARY KEY,

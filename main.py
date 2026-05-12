@@ -54,6 +54,9 @@ class RecurringEventRequest(BaseModel):
     start_hour: int
     end_hour: int
 
+class ConsentRequest(BaseModel):
+    user_id: str
+
 class JoinRequest(BaseModel):
     name: str
     user_id: Optional[str] = None   # 풀유저면 user_id 포함
@@ -402,13 +405,29 @@ def save_availability(code: str, body: AvailabilityRequest):
     return {"ok": True}
 
 
+@app.post("/rooms/{code}/consent", status_code=201)
+def consent_room(code: str, body: ConsentRequest):
+    """만료된 방 재사용 동의."""
+    code = code.upper()
+    with get_conn() as conn:
+        if not conn.execute("SELECT 1 FROM rooms WHERE code=?", (code,)).fetchone():
+            raise HTTPException(404, "방을 찾을 수 없어요")
+        if not conn.execute("SELECT 1 FROM users WHERE id=?", (body.user_id,)).fetchone():
+            raise HTTPException(404, "유저를 찾을 수 없어요")
+        conn.execute(
+            "INSERT OR REPLACE INTO room_consents (room_code, user_id) VALUES (?,?)",
+            (code, body.user_id)
+        )
+    return {"ok": True}
+
+
 @app.get("/rooms/{code}/free-slots")
-def get_free_slots(code: str):
+def get_free_slots(code: str, user_id: Optional[str] = Query(None)):
     """
     풀유저: 개인 캘린더에서 busy 시간 자동 계산
     게스트: 수동 제출한 availability 사용
     교집합 → 모두가 비어있는 시간 반환
-    약속 날짜 24시간 경과 후 만료 처리
+    약속 날짜 24시간 경과 후 만료 → 동의한 멤버끼리만 공유
     """
     code = code.upper()
     with get_conn() as conn:
@@ -418,15 +437,56 @@ def get_free_slots(code: str):
         if not room:
             raise HTTPException(404, "방을 찾을 수 없어요")
 
-        # 만료 체크: date_to 기준 24시간 경과 시 일정 숨김
+        # 만료 체크
+        expired = False
         if room["date_to"]:
             expire_date = date.fromisoformat(room["date_to"]) + timedelta(days=1)
             if date.today() > expire_date:
-                return {"expired": True}
+                expired = True
 
-        participants = conn.execute(
+        if expired:
+            # 동의한 풀유저 목록
+            consented_rows = conn.execute(
+                "SELECT u.id, u.nickname FROM room_consents rc JOIN users u ON u.id = rc.user_id WHERE rc.room_code=?",
+                (code,)
+            ).fetchall()
+            consented_ids = {r["id"] for r in consented_rows}
+            consented_names = [r["nickname"] for r in consented_rows]
+
+            # 방 전체 풀유저 목록
+            all_full = conn.execute(
+                "SELECT p.user_id, p.name FROM participants p WHERE p.room_code=? AND p.type='full'",
+                (code,)
+            ).fetchall()
+            pending_consent = [p["name"] for p in all_full if p["user_id"] not in consented_ids]
+
+            user_consented = user_id in consented_ids if user_id else False
+
+            if not user_consented:
+                return {
+                    "expired": True,
+                    "user_consented": False,
+                    "consented_users": consented_names,
+                    "pending_consent": pending_consent,
+                }
+
+            # 동의한 사람들만 대상으로 free-slots 계산
+            # 이후 로직에서 participants를 동의자로 필터링
+            consented_participant_ids = consented_ids
+
+        all_participants = conn.execute(
             "SELECT id, name, user_id, type FROM participants WHERE room_code=?", (code,)
         ).fetchall()
+
+        # 만료된 방: 동의한 풀유저만 포함, 게스트 제외
+        if expired:
+            participants = [p for p in all_participants
+                            if p["type"] == "full" and p["user_id"] in consented_participant_ids]
+            pending_consent_names = [p["name"] for p in all_participants
+                                     if p["type"] == "full" and p["user_id"] not in consented_participant_ids]
+        else:
+            participants = all_participants
+            pending_consent_names = []
 
         if not participants:
             return {"participants": [], "pending_guests": [], "free_dates": [], "total": 0}
@@ -524,8 +584,11 @@ def get_free_slots(code: str):
                 free_dates.append({"date": d, "free_hours": free_hours})
 
     return {
+        "expired": expired,
+        "user_consented": True if expired else None,
         "participants": [p["name"] for p in participants],
-        "pending_guests": pending_guests,   # 아직 응답 안 한 게스트
+        "pending_guests": pending_guests,
+        "pending_consent": pending_consent_names if expired else [],
         "free_dates": free_dates,
         "total": len(participants),
     }
