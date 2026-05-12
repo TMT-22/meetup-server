@@ -253,6 +253,50 @@ def delete_event(user_id: str, event_id: str):
 
 # ── 약속 방 ───────────────────────────────────────────────────────────────────
 
+@app.get("/users/{user_id}/rooms")
+def get_user_rooms(user_id: str):
+    """내가 참여 중인 방 목록."""
+    with get_conn() as conn:
+        rooms = conn.execute("""
+            SELECT r.code, r.title, r.date_from, r.date_to, r.created_at
+            FROM rooms r
+            JOIN participants p ON p.room_code = r.code
+            WHERE p.user_id = ?
+            ORDER BY r.created_at DESC
+        """, (user_id,)).fetchall()
+
+        result = []
+        for room in rooms:
+            code = room["code"]
+            participants = conn.execute(
+                "SELECT name, type, user_id FROM participants WHERE room_code=?", (code,)
+            ).fetchall()
+
+            # 응답 완료 수 계산
+            responded = 0
+            for pt in participants:
+                if pt["type"] == "full":
+                    responded += 1
+                else:
+                    has = conn.execute(
+                        "SELECT 1 FROM availability WHERE participant_id = (SELECT id FROM participants WHERE room_code=? AND name=?) LIMIT 1",
+                        (code, pt["name"])
+                    ).fetchone()
+                    if has:
+                        responded += 1
+
+            result.append({
+                "code": code,
+                "title": room["title"],
+                "date_from": room["date_from"],
+                "date_to": room["date_to"],
+                "participants": [p["name"] for p in participants],
+                "total": len(participants),
+                "responded": responded,
+            })
+    return {"rooms": result}
+
+
 @app.post("/rooms", status_code=201)
 def create_room(body: CreateRoomRequest = None):
     """
