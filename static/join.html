@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>약속 참여하기</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f6fa; min-height: 100vh; }
+
+    .header { background: #6366f1; padding: 48px 24px 24px; text-align: center; color: white; }
+    .header-code { font-size: 26px; font-weight: 800; letter-spacing: 6px; }
+    .header-title { font-size: 14px; opacity: 0.8; margin-top: 6px; }
+
+    .container { padding: 20px 16px 40px; max-width: 480px; margin: 0 auto; }
+    .card { background: white; border-radius: 16px; padding: 20px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+
+    .label { font-size: 12px; font-weight: 700; color: #6b7280; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+
+    input[type="text"] {
+      width: 100%; padding: 14px; border: 2px solid #e5e7eb; border-radius: 12px;
+      font-size: 16px; color: #1a1a2e; outline: none; transition: border-color 0.2s;
+    }
+    input[type="text"]:focus { border-color: #6366f1; }
+
+    .btn { width: 100%; padding: 16px; border: none; border-radius: 14px; font-size: 16px; font-weight: 700; cursor: pointer; transition: opacity 0.2s; }
+    .btn-primary { background: #6366f1; color: white; }
+    .btn-primary:disabled { opacity: 0.4; cursor: default; }
+    .btn-secondary { background: #f3f4f6; color: #374151; }
+
+    .cal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+    .cal-month { font-size: 16px; font-weight: 700; color: #1a1a2e; }
+    .cal-nav { background: none; border: none; font-size: 22px; cursor: pointer; color: #6366f1; padding: 4px 10px; }
+    .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+    .cal-day-header { text-align: center; font-size: 11px; font-weight: 700; color: #9ca3af; padding: 4px 0; }
+    .cal-day { text-align: center; padding: 9px 0; font-size: 14px; border-radius: 8px; cursor: pointer; color: #374151; user-select: none; }
+    .cal-day:not(.past):not(.empty):hover { background: #ede9fe; }
+    .cal-day.selected { background: #6366f1; color: white; font-weight: 700; }
+    .cal-day.today { color: #6366f1; font-weight: 700; }
+    .cal-day.past { color: #d1d5db; cursor: default; }
+    .cal-day.empty { cursor: default; }
+
+    .date-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+    .date-chip { background: #ede9fe; color: #6366f1; border-radius: 20px; padding: 6px 14px; font-size: 13px; font-weight: 600; cursor: pointer; border: 2px solid transparent; }
+    .date-chip.active { background: #6366f1; color: white; }
+
+    .time-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+    .time-btn { width: calc(25% - 6px); padding: 10px 0; border: 2px solid #e5e7eb; border-radius: 10px; background: white; font-size: 13px; font-weight: 500; color: #374151; cursor: pointer; }
+    .time-btn.on { background: #6366f1; border-color: #6366f1; color: white; font-weight: 700; }
+
+    .row { display: flex; gap: 10px; }
+
+    .success-wrap { text-align: center; padding: 40px 0; }
+    .success-icon { font-size: 64px; margin-bottom: 16px; }
+    .success-title { font-size: 22px; font-weight: 800; color: #1a1a2e; margin-bottom: 8px; }
+    .success-sub { font-size: 14px; color: #6b7280; line-height: 1.7; white-space: pre-line; }
+
+    .step-dots { display: flex; justify-content: center; gap: 8px; margin-bottom: 20px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #e5e7eb; }
+    .dot.on { background: #6366f1; }
+
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-code" id="headerCode">------</div>
+  <div class="header-title" id="headerTitle">불러오는 중...</div>
+</div>
+
+<!-- Step 1: 이름 -->
+<div id="step1" class="container">
+  <div class="step-dots"><div class="dot on"></div><div class="dot"></div><div class="dot"></div></div>
+  <div class="card">
+    <div class="label">이름 입력</div>
+    <input type="text" id="nameInput" placeholder="참여할 이름을 입력해주세요" maxlength="20" />
+  </div>
+  <button class="btn btn-primary" id="step1Btn" onclick="goStep2()" disabled>다음 →</button>
+</div>
+
+<!-- Step 2: 날짜 + 시간 -->
+<div id="step2" class="container hidden">
+  <div class="step-dots"><div class="dot"></div><div class="dot on"></div><div class="dot"></div></div>
+
+  <div class="card">
+    <div class="label">가능한 날짜 선택</div>
+    <div class="cal-header">
+      <button class="cal-nav" onclick="changeMonth(-1)">‹</button>
+      <span class="cal-month" id="calMonth"></span>
+      <button class="cal-nav" onclick="changeMonth(1)">›</button>
+    </div>
+    <div class="cal-grid" id="calGrid"></div>
+  </div>
+
+  <div id="chipsCard" class="card hidden">
+    <div class="label">날짜 탭해서 시간 선택</div>
+    <div class="date-chips" id="dateChips"></div>
+  </div>
+
+  <div id="timeCard" class="card hidden">
+    <div class="label" id="timeLabel">시간 선택</div>
+    <div class="time-grid" id="timeGrid"></div>
+  </div>
+
+  <div class="row">
+    <button class="btn btn-secondary" style="width:auto;padding:14px 20px;" onclick="show('step1')">← 이전</button>
+    <button class="btn btn-primary" id="saveBtn" onclick="save()" style="flex:1" disabled>✅ 저장하기</button>
+  </div>
+</div>
+
+<!-- Step 3: 완료 -->
+<div id="step3" class="container hidden">
+  <div class="step-dots"><div class="dot"></div><div class="dot"></div><div class="dot on"></div></div>
+  <div class="card success-wrap">
+    <div class="success-icon">🎉</div>
+    <div class="success-title">완료!</div>
+    <div class="success-sub" id="successMsg"></div>
+  </div>
+</div>
+
+<script>
+  const BASE = location.origin;
+  const code = location.pathname.split('/').filter(Boolean).pop().toUpperCase();
+  let participantId = null;
+  let selectedDates = new Set();
+  let timeSlots = {};
+  let activeDate = null;
+  let curYear, curMonth;
+  const HOURS = Array.from({length: 15}, (_, i) => i + 8);
+  const DAY_LABELS = ['일','월','화','수','목','금','토'];
+
+  (async () => {
+    document.getElementById('headerCode').textContent = code;
+    try {
+      const res = await fetch(`${BASE}/rooms/${code}`);
+      if (!res.ok) throw 0;
+      const room = await res.json();
+      document.getElementById('headerTitle').textContent = room.title || '약속 참여하기';
+      document.title = room.title || '약속 참여하기';
+    } catch {
+      document.getElementById('headerTitle').textContent = '방을 찾을 수 없어요';
+    }
+    const now = new Date();
+    curYear = now.getFullYear(); curMonth = now.getMonth();
+    renderCal();
+    document.getElementById('nameInput').addEventListener('input', e => {
+      document.getElementById('step1Btn').disabled = !e.target.value.trim();
+    });
+  })();
+
+  function renderCal() {
+    const mn = ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
+    document.getElementById('calMonth').textContent = `${curYear}년 ${mn[curMonth]}`;
+    const today = new Date(); today.setHours(0,0,0,0);
+    const firstDay = new Date(curYear, curMonth, 1).getDay();
+    const daysInMonth = new Date(curYear, curMonth + 1, 0).getDate();
+    const grid = document.getElementById('calGrid');
+    grid.innerHTML = '';
+    DAY_LABELS.forEach(d => {
+      const el = document.createElement('div');
+      el.className = 'cal-day-header'; el.textContent = d; grid.appendChild(el);
+    });
+    for (let i = 0; i < firstDay; i++) {
+      const el = document.createElement('div'); el.className = 'cal-day empty'; grid.appendChild(el);
+    }
+    for (let d = 1; d <= daysInMonth; d++) {
+      const ds = `${curYear}-${String(curMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+      const dt = new Date(curYear, curMonth, d);
+      const el = document.createElement('div');
+      el.textContent = d;
+      if (dt < today) { el.className = 'cal-day past'; }
+      else {
+        let cls = 'cal-day';
+        if (selectedDates.has(ds)) cls += ' selected';
+        if (dt.getTime() === today.getTime()) cls += ' today';
+        el.className = cls;
+        el.onclick = () => toggleDate(ds);
+      }
+      grid.appendChild(el);
+    }
+  }
+
+  function toggleDate(ds) {
+    if (selectedDates.has(ds)) {
+      selectedDates.delete(ds); delete timeSlots[ds];
+      if (activeDate === ds) { activeDate = null; renderTimeSection(); }
+    } else {
+      selectedDates.add(ds); setActive(ds);
+    }
+    renderCal(); renderChips(); updateSave();
+  }
+
+  function setActive(d) {
+    activeDate = d; renderChips(); renderTimeSection();
+  }
+
+  function renderChips() {
+    const sorted = Array.from(selectedDates).sort();
+    const card = document.getElementById('chipsCard');
+    const chips = document.getElementById('dateChips');
+    if (!sorted.length) { card.classList.add('hidden'); return; }
+    card.classList.remove('hidden');
+    chips.innerHTML = '';
+    sorted.forEach(d => {
+      const el = document.createElement('div');
+      el.className = 'date-chip' + (d === activeDate ? ' active' : '');
+      el.textContent = d.slice(5);
+      el.onclick = () => setActive(d);
+      chips.appendChild(el);
+    });
+  }
+
+  function renderTimeSection() {
+    const card = document.getElementById('timeCard');
+    if (!activeDate) { card.classList.add('hidden'); return; }
+    card.classList.remove('hidden');
+    document.getElementById('timeLabel').textContent = `${activeDate.slice(5)} — 가능한 시간`;
+    const grid = document.getElementById('timeGrid');
+    grid.innerHTML = '';
+    const slots = timeSlots[activeDate] || new Set();
+    HOURS.forEach(h => {
+      const el = document.createElement('button');
+      el.className = 'time-btn' + (slots.has(h) ? ' on' : '');
+      el.textContent = `${h}:00`;
+      el.onclick = () => {
+        if (!timeSlots[activeDate]) timeSlots[activeDate] = new Set();
+        timeSlots[activeDate].has(h) ? timeSlots[activeDate].delete(h) : timeSlots[activeDate].add(h);
+        el.classList.toggle('on'); updateSave();
+      };
+      grid.appendChild(el);
+    });
+  }
+
+  function updateSave() {
+    document.getElementById('saveBtn').disabled = selectedDates.size === 0;
+  }
+
+  function changeMonth(d) {
+    curMonth += d;
+    if (curMonth < 0) { curMonth = 11; curYear--; }
+    if (curMonth > 11) { curMonth = 0; curYear++; }
+    renderCal();
+  }
+
+  function show(id) {
+    ['step1','step2','step3'].forEach(s => document.getElementById(s).classList.add('hidden'));
+    document.getElementById(id).classList.remove('hidden');
+  }
+
+  async function goStep2() {
+    const name = document.getElementById('nameInput').value.trim();
+    if (!name) return;
+    try {
+      const res = await fetch(`${BASE}/rooms/${code}/join`, {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({name})
+      });
+      const data = await res.json();
+      participantId = data.participant_id;
+      show('step2');
+    } catch { alert('오류가 발생했어요. 다시 시도해주세요.'); }
+  }
+
+  async function save() {
+    if (!participantId || selectedDates.size === 0) return;
+    const availability = Array.from(selectedDates).sort().map(date => ({
+      date, hours: Array.from(timeSlots[date] || []).sort((a,b) => a-b)
+    }));
+    try {
+      await fetch(`${BASE}/rooms/${code}/availability`, {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({participant_id: participantId, availability})
+      });
+      const name = document.getElementById('nameInput').value.trim();
+      document.getElementById('successMsg').textContent =
+        `${name}님의 가능한 시간이 저장됐어요!\n친구에게 약속 코드 ${code}를 알려주면\n앱에서 결과를 확인할 수 있어요.`;
+      show('step3');
+    } catch { alert('저장에 실패했어요. 다시 시도해주세요.'); }
+  }
+</script>
+</body>
+</html>
