@@ -48,6 +48,12 @@ class AddEventRequest(BaseModel):
     start_hour: int
     end_hour: int
 
+class RecurringEventRequest(BaseModel):
+    title: str
+    day_of_week: int  # 0=월 1=화 2=수 3=목 4=금 5=토 6=일
+    start_hour: int
+    end_hour: int
+
 class JoinRequest(BaseModel):
     name: str
     user_id: Optional[str] = None   # 풀유저면 user_id 포함
@@ -79,6 +85,23 @@ def _make_code(length=6) -> str:
                 return code
     raise RuntimeError("코드 생성 실패")
 
+
+KOREAN_HOLIDAYS = {
+    # 2025
+    "2025-01-01", "2025-01-28", "2025-01-29", "2025-01-30",
+    "2025-03-01", "2025-05-05", "2025-05-06", "2025-06-06",
+    "2025-08-15", "2025-10-03", "2025-10-05", "2025-10-06", "2025-10-07", "2025-10-08",
+    "2025-12-25",
+    # 2026
+    "2026-01-01", "2026-02-17", "2026-02-18", "2026-02-19",
+    "2026-03-01", "2026-05-05", "2026-05-25",
+    "2026-06-06", "2026-08-17",
+    "2026-09-24", "2026-09-25", "2026-09-26",
+    "2026-10-03", "2026-10-09", "2026-12-25",
+}
+
+def _is_holiday(date_str: str) -> bool:
+    return date_str in KOREAN_HOLIDAYS
 
 def _date_range(date_from: str, date_to: str):
     """date_from ~ date_to 사이 모든 날짜 문자열 리스트."""
@@ -179,6 +202,42 @@ def add_event(user_id: str, body: AddEventRequest):
             (eid, user_id, body.title.strip(), body.date, body.start_hour, body.end_hour)
         )
     return {"event_id": eid}
+
+
+@app.get("/users/{user_id}/recurring-events")
+def get_recurring_events(user_id: str):
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, title, day_of_week, start_hour, end_hour FROM recurring_events "
+            "WHERE user_id=? ORDER BY day_of_week, start_hour", (user_id,)
+        ).fetchall()
+    return {"recurring_events": [dict(r) for r in rows]}
+
+
+@app.post("/users/{user_id}/recurring-events", status_code=201)
+def add_recurring_event(user_id: str, body: RecurringEventRequest):
+    if body.start_hour >= body.end_hour:
+        raise HTTPException(400, "종료 시간은 시작 시간보다 늦어야 해요.")
+    if body.day_of_week < 0 or body.day_of_week > 6:
+        raise HTTPException(400, "요일 값이 올바르지 않아요.")
+    eid = uuid.uuid4().hex
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO recurring_events (id, user_id, title, day_of_week, start_hour, end_hour) VALUES (?,?,?,?,?,?)",
+            (eid, user_id, body.title.strip(), body.day_of_week, body.start_hour, body.end_hour)
+        )
+    return {"event_id": eid}
+
+
+@app.delete("/users/{user_id}/recurring-events/{event_id}")
+def delete_recurring_event(user_id: str, event_id: str):
+    with get_conn() as conn:
+        if not conn.execute(
+            "SELECT 1 FROM recurring_events WHERE id=? AND user_id=?", (event_id, user_id)
+        ).fetchone():
+            raise HTTPException(404, "일정을 찾을 수 없어요.")
+        conn.execute("DELETE FROM recurring_events WHERE id=?", (event_id,))
+    return {"ok": True}
 
 
 @app.delete("/users/{user_id}/events/{event_id}")
@@ -349,14 +408,31 @@ def get_free_slots(code: str):
         full_busy = {}
         for p in full_participants:
             uid = p["user_id"]
+            busy_set = set()
+
+            # 단일 일정
             events = conn.execute(
                 "SELECT date, start_hour, end_hour FROM user_events WHERE user_id=? AND date >= ? AND date <= ?",
                 (uid, candidate_dates[0], candidate_dates[-1])
             ).fetchall()
-            busy_set = set()
             for ev in events:
                 for h in range(ev["start_hour"], ev["end_hour"]):
                     busy_set.add((ev["date"], h))
+
+            # 반복 일정 (공휴일 제외)
+            recurring = conn.execute(
+                "SELECT day_of_week, start_hour, end_hour FROM recurring_events WHERE user_id=?", (uid,)
+            ).fetchall()
+            for d in candidate_dates:
+                if _is_holiday(d):
+                    continue
+                dt = date.fromisoformat(d)
+                dow = dt.weekday()  # 0=월 ... 6=일
+                for rec in recurring:
+                    if rec["day_of_week"] == dow:
+                        for h in range(rec["start_hour"], rec["end_hour"]):
+                            busy_set.add((d, h))
+
             full_busy[uid] = busy_set
 
         # 게스트 available 슬롯 수집 {participant_id: {(date, hour)}}

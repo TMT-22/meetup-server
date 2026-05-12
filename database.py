@@ -71,4 +71,16 @@ def init_db():
                 UNIQUE(participant_id, date, hour),
                 FOREIGN KEY (participant_id) REFERENCES participants(id)
             );
+
+            -- 매주 반복 일정: day_of_week 0=월 1=화 2=수 3=목 4=금 5=토 6=일
+            CREATE TABLE IF NOT EXISTS recurring_events (
+                id          TEXT PRIMARY KEY,
+                user_id     TEXT NOT NULL,
+                title       TEXT NOT NULL,
+                day_of_week INTEGER NOT NULL,
+                start_hour  INTEGER NOT NULL,
+                end_hour    INTEGER NOT NULL,
+                created_at  TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
         """)
