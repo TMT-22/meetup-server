@@ -408,6 +408,7 @@ def get_free_slots(code: str):
     풀유저: 개인 캘린더에서 busy 시간 자동 계산
     게스트: 수동 제출한 availability 사용
     교집합 → 모두가 비어있는 시간 반환
+    약속 날짜 24시간 경과 후 만료 처리
     """
     code = code.upper()
     with get_conn() as conn:
@@ -416,6 +417,12 @@ def get_free_slots(code: str):
         ).fetchone()
         if not room:
             raise HTTPException(404, "방을 찾을 수 없어요")
+
+        # 만료 체크: date_to 기준 24시간 경과 시 일정 숨김
+        if room["date_to"]:
+            expire_date = date.fromisoformat(room["date_to"]) + timedelta(days=1)
+            if date.today() > expire_date:
+                return {"expired": True}
 
         participants = conn.execute(
             "SELECT id, name, user_id, type FROM participants WHERE room_code=?", (code,)
