@@ -265,6 +265,7 @@ def get_user_rooms(user_id: str):
             ORDER BY r.created_at DESC
         """, (user_id,)).fetchall()
 
+        today = date.today().isoformat()
         result = []
         for room in rooms:
             code = room["code"]
@@ -272,7 +273,6 @@ def get_user_rooms(user_id: str):
                 "SELECT name, type, user_id FROM participants WHERE room_code=?", (code,)
             ).fetchall()
 
-            # 응답 완료 수 계산
             responded = 0
             for pt in participants:
                 if pt["type"] == "full":
@@ -294,6 +294,17 @@ def get_user_rooms(user_id: str):
                 "total": len(participants),
                 "responded": responded,
             })
+
+    # 가까운 미래 날짜 순 정렬, 날짜 없는 건 맨 아래
+    def sort_key(r):
+        d = r["date_from"]
+        if not d:
+            return "9999-99-99"
+        if d < today:
+            return "8888-" + d  # 지난 약속은 날짜 없는 것 위, 미래 아래
+        return d
+
+    result.sort(key=sort_key)
     return {"rooms": result}
 
 
