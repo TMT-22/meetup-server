@@ -57,6 +57,9 @@ class RecurringEventRequest(BaseModel):
 class ConsentRequest(BaseModel):
     user_id: str
 
+class AcceptRequest(BaseModel):
+    user_id: str
+
 class JoinRequest(BaseModel):
     name: str
     user_id: Optional[str] = None   # 풀유저면 user_id 포함
@@ -261,7 +264,8 @@ def get_user_rooms(user_id: str):
     """내가 참여 중인 방 목록."""
     with get_conn() as conn:
         rooms = conn.execute("""
-            SELECT r.code, r.title, r.date_from, r.date_to, r.created_at
+            SELECT r.code, r.title, r.date_from, r.date_to, r.created_at,
+                   p.accepted as my_accepted
             FROM rooms r
             JOIN participants p ON p.room_code = r.code
             WHERE p.user_id = ?
@@ -296,6 +300,7 @@ def get_user_rooms(user_id: str):
                 "participants": [p["name"] for p in participants],
                 "total": len(participants),
                 "responded": responded,
+                "my_accepted": bool(room["my_accepted"]),
             })
 
     # 가까운 미래 날짜 순 정렬, 날짜 없는 건 맨 아래
@@ -325,22 +330,22 @@ def create_room(body: CreateRoomRequest = None):
             "INSERT INTO rooms (code, title, created_by, date_from, date_to) VALUES (?,?,?,?,?)",
             (code, body.title, body.created_by, body.date_from, body.date_to)
         )
-        # 방장 자동 참여 (풀유저)
+        # 방장 자동 참여 (수락 완료)
         if body.created_by:
             creator = conn.execute(
                 "SELECT nickname FROM users WHERE id=?", (body.created_by,)
             ).fetchone()
             if creator:
                 conn.execute(
-                    "INSERT INTO participants (id, room_code, name, user_id, type) VALUES (?,?,?,?,?)",
+                    "INSERT INTO participants (id, room_code, name, user_id, type, accepted) VALUES (?,?,?,?,?,1)",
                     (uuid.uuid4().hex, code, creator["nickname"], body.created_by, "full")
                 )
-        # 초대된 친구 자동 참여 (풀유저)
+        # 초대된 친구 (수락 대기)
         for fid in (body.friend_ids or []):
             friend = conn.execute("SELECT nickname FROM users WHERE id=?", (fid,)).fetchone()
             if friend:
                 conn.execute(
-                    "INSERT OR IGNORE INTO participants (id, room_code, name, user_id, type) VALUES (?,?,?,?,?)",
+                    "INSERT OR IGNORE INTO participants (id, room_code, name, user_id, type, accepted) VALUES (?,?,?,?,?,0)",
                     (uuid.uuid4().hex, code, friend["nickname"], fid, "full")
                 )
     return {"code": code}
@@ -402,6 +407,23 @@ def save_availability(code: str, body: AvailabilityRequest):
                     "INSERT OR IGNORE INTO availability (participant_id, room_code, date, hour) VALUES (?,?,?,?)",
                     (body.participant_id, code, day.date, hour)
                 )
+    return {"ok": True}
+
+
+@app.post("/rooms/{code}/accept", status_code=200)
+def accept_invite(code: str, body: AcceptRequest):
+    """초대 수락."""
+    code = code.upper()
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id FROM participants WHERE room_code=? AND user_id=?",
+            (code, body.user_id)
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "초대를 찾을 수 없어요")
+        conn.execute(
+            "UPDATE participants SET accepted=1 WHERE id=?", (row["id"],)
+        )
     return {"ok": True}
 
 
@@ -475,8 +497,10 @@ def get_free_slots(code: str, user_id: Optional[str] = Query(None)):
             consented_participant_ids = consented_ids
 
         all_participants = conn.execute(
-            "SELECT id, name, user_id, type FROM participants WHERE room_code=?", (code,)
+            "SELECT id, name, user_id, type, accepted FROM participants WHERE room_code=?", (code,)
         ).fetchall()
+
+        pending_invites = [p["name"] for p in all_participants if not p["accepted"]]
 
         # 만료된 방: 동의한 풀유저만 포함, 게스트 제외
         if expired:
@@ -485,7 +509,8 @@ def get_free_slots(code: str, user_id: Optional[str] = Query(None)):
             pending_consent_names = [p["name"] for p in all_participants
                                      if p["type"] == "full" and p["user_id"] not in consented_participant_ids]
         else:
-            participants = all_participants
+            # 수락한 참여자만
+            participants = [p for p in all_participants if p["accepted"]]
             pending_consent_names = []
 
         if not participants:
@@ -494,14 +519,21 @@ def get_free_slots(code: str, user_id: Optional[str] = Query(None)):
         date_from = room["date_from"]
         date_to   = room["date_to"]
 
-        # 날짜 범위 결정: 방에 range 없으면 게스트 제출 날짜 기준
+        # 날짜 범위 결정
         if date_from and date_to:
             candidate_dates = _date_range(date_from, date_to)
         else:
             guest_dates = conn.execute(
                 "SELECT DISTINCT date FROM availability WHERE room_code=? ORDER BY date", (code,)
             ).fetchall()
-            candidate_dates = [r["date"] for r in guest_dates]
+            if guest_dates:
+                candidate_dates = [r["date"] for r in guest_dates]
+            else:
+                # 날짜 미지정 → 오늘부터 30일
+                candidate_dates = _date_range(
+                    date.today().isoformat(),
+                    (date.today() + timedelta(days=30)).isoformat()
+                )
 
         if not candidate_dates:
             return {
@@ -587,6 +619,7 @@ def get_free_slots(code: str, user_id: Optional[str] = Query(None)):
         "expired": expired,
         "user_consented": True if expired else None,
         "participants": [p["name"] for p in participants],
+        "pending_invites": pending_invites,
         "pending_guests": pending_guests,
         "pending_consent": pending_consent_names if expired else [],
         "free_dates": free_dates,

@@ -51,12 +51,14 @@ def init_db():
             );
 
             -- type: 'full' = 계정 보유(캘린더 자동), 'guest' = 수동 입력
+            -- accepted: 1=수락, 0=초대 대기
             CREATE TABLE IF NOT EXISTS participants (
                 id          TEXT PRIMARY KEY,
                 room_code   TEXT NOT NULL,
                 name        TEXT NOT NULL,
                 user_id     TEXT,
                 type        TEXT DEFAULT 'guest',
+                accepted    INTEGER DEFAULT 1,
                 joined_at   TEXT DEFAULT (datetime('now')),
                 FOREIGN KEY (room_code) REFERENCES rooms(code),
                 FOREIGN KEY (user_id)   REFERENCES users(id)
@@ -94,3 +96,8 @@ def init_db():
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
         """)
+        # 기존 DB 마이그레이션
+        try:
+            conn.execute("ALTER TABLE participants ADD COLUMN accepted INTEGER DEFAULT 1")
+        except Exception:
+            pass
