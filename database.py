@@ -96,6 +96,14 @@ def init_db():
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
         """)
+            CREATE TABLE IF NOT EXISTS push_tokens (
+                user_id     TEXT NOT NULL,
+                token       TEXT NOT NULL,
+                updated_at  TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (user_id),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+        """)
         # 기존 DB 마이그레이션
         try:
             conn.execute("ALTER TABLE participants ADD COLUMN accepted INTEGER DEFAULT 1")

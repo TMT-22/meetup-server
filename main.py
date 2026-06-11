@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import List, Optional
 import os
+import requests
 
 from database import get_conn, init_db
 
@@ -38,6 +39,12 @@ def join_page(code: str):
 
 class CreateUserRequest(BaseModel):
     nickname: str
+
+class UpdateUserRequest(BaseModel):
+    nickname: str
+
+class PushTokenRequest(BaseModel):
+    token: str
 
 class AddFriendRequest(BaseModel):
     friend_id: str
@@ -81,6 +88,30 @@ class AvailabilityRequest(BaseModel):
 
 
 # ── 헬퍼 ──────────────────────────────────────────────────────────────────────
+
+def _send_push(tokens: list[str], title: str, body: str):
+    if not tokens:
+        return
+    messages = [{"to": t, "title": title, "body": body, "sound": "default"} for t in tokens]
+    try:
+        requests.post(
+            "https://exp.host/--/api/v2/push/send",
+            json=messages,
+            headers={"Content-Type": "application/json"},
+            timeout=5,
+        )
+    except Exception:
+        pass
+
+def _get_tokens(user_ids: list[str]) -> list[str]:
+    if not user_ids:
+        return []
+    with get_conn() as conn:
+        placeholders = ",".join("?" * len(user_ids))
+        rows = conn.execute(
+            f"SELECT token FROM push_tokens WHERE user_id IN ({placeholders})", user_ids
+        ).fetchall()
+    return [r["token"] for r in rows]
 
 def _make_code(length=6) -> str:
     chars = string.ascii_uppercase + string.digits
@@ -134,6 +165,28 @@ def create_user(body: CreateUserRequest):
         uid = uuid.uuid4().hex
         conn.execute("INSERT INTO users (id, nickname) VALUES (?,?)", (uid, nickname))
     return {"user_id": uid, "nickname": nickname}
+
+
+@app.patch("/users/{user_id}")
+def update_user(user_id: str, body: UpdateUserRequest):
+    nickname = body.nickname.strip()
+    if not nickname:
+        raise HTTPException(400, "닉네임을 입력해주세요.")
+    with get_conn() as conn:
+        if not conn.execute("SELECT 1 FROM users WHERE id=?", (user_id,)).fetchone():
+            raise HTTPException(404, "유저를 찾을 수 없어요.")
+        conn.execute("UPDATE users SET nickname=? WHERE id=?", (nickname, user_id))
+    return {"ok": True}
+
+
+@app.post("/users/{user_id}/push-token", status_code=201)
+def save_push_token(user_id: str, body: PushTokenRequest):
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO push_tokens (user_id, token, updated_at) VALUES (?,?, datetime('now'))",
+            (user_id, body.token)
+        )
+    return {"ok": True}
 
 
 @app.get("/users/search")
@@ -341,6 +394,7 @@ def create_room(body: CreateRoomRequest = None):
                     (uuid.uuid4().hex, code, creator["nickname"], body.created_by, "full")
                 )
         # 초대된 친구 (수락 대기)
+        invited_ids = []
         for fid in (body.friend_ids or []):
             friend = conn.execute("SELECT nickname FROM users WHERE id=?", (fid,)).fetchone()
             if friend:
@@ -348,6 +402,16 @@ def create_room(body: CreateRoomRequest = None):
                     "INSERT OR IGNORE INTO participants (id, room_code, name, user_id, type, accepted) VALUES (?,?,?,?,?,0)",
                     (uuid.uuid4().hex, code, friend["nickname"], fid, "full")
                 )
+                invited_ids.append(fid)
+
+    # 초대 알림 전송
+    if invited_ids and body.created_by:
+        with get_conn() as conn:
+            creator = conn.execute("SELECT nickname FROM users WHERE id=?", (body.created_by,)).fetchone()
+        tokens = _get_tokens(invited_ids)
+        creator_name = creator["nickname"] if creator else "누군가"
+        _send_push(tokens, "새 약속 초대 📅", f"{creator_name}님이 '{body.title}' 약속에 초대했어요!")
+
     return {"code": code}
 
 
@@ -421,9 +485,21 @@ def accept_invite(code: str, body: AcceptRequest):
         ).fetchone()
         if not row:
             raise HTTPException(404, "초대를 찾을 수 없어요")
-        conn.execute(
-            "UPDATE participants SET accepted=1 WHERE id=?", (row["id"],)
-        )
+        conn.execute("UPDATE participants SET accepted=1 WHERE id=?", (row["id"],))
+
+        # 수락한 유저 닉네임
+        accepter = conn.execute(
+            "SELECT nickname FROM users WHERE id=?", (body.user_id,)
+        ).fetchone()
+        # 방 제목 + 방장 user_id
+        room = conn.execute(
+            "SELECT title, created_by FROM rooms WHERE code=?", (code,)
+        ).fetchone()
+
+    if accepter and room and room["created_by"] and room["created_by"] != body.user_id:
+        tokens = _get_tokens([room["created_by"]])
+        _send_push(tokens, "약속 수락됨 🎉", f"{accepter['nickname']}님이 '{room['title']}' 약속을 수락했어요!")
+
     return {"ok": True}
 
 
