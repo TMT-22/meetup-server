@@ -211,6 +211,14 @@ def get_user(user_id: str):
 
 # ── 친구 ──────────────────────────────────────────────────────────────────────
 
+@app.delete("/users/{user_id}/friends/{friend_id}")
+def delete_friend(user_id: str, friend_id: str):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM friendships WHERE user_id=? AND friend_id=?", (user_id, friend_id))
+        conn.execute("DELETE FROM friendships WHERE user_id=? AND friend_id=?", (friend_id, user_id))
+    return {"ok": True}
+
+
 @app.post("/users/{user_id}/friends", status_code=201)
 def add_friend(user_id: str, body: AddFriendRequest):
     if user_id == body.friend_id:
@@ -317,7 +325,7 @@ def get_user_rooms(user_id: str):
     """내가 참여 중인 방 목록."""
     with get_conn() as conn:
         rooms = conn.execute("""
-            SELECT r.code, r.title, r.date_from, r.date_to, r.created_at,
+            SELECT r.code, r.title, r.date_from, r.date_to, r.created_at, r.created_by,
                    p.accepted as my_accepted
             FROM rooms r
             JOIN participants p ON p.room_code = r.code
@@ -354,6 +362,7 @@ def get_user_rooms(user_id: str):
                 "total": len(participants),
                 "responded": responded,
                 "my_accepted": bool(room["my_accepted"]),
+                "is_creator": room["created_by"] == user_id,
             })
 
     # 가까운 미래 날짜 순 정렬, 날짜 없는 건 맨 아래
@@ -413,6 +422,25 @@ def create_room(body: CreateRoomRequest = None):
         _send_push(tokens, "새 약속 초대 📅", f"{creator_name}님이 '{body.title}' 약속에 초대했어요!")
 
     return {"code": code}
+
+
+@app.delete("/rooms/{code}")
+def delete_room(code: str, user_id: str = Query(...)):
+    code = code.upper()
+    with get_conn() as conn:
+        room = conn.execute("SELECT created_by FROM rooms WHERE code=?", (code,)).fetchone()
+        if not room:
+            raise HTTPException(404, "방을 찾을 수 없어요")
+        if room["created_by"] == user_id:
+            # 방장 → 방 전체 삭제
+            conn.execute("DELETE FROM availability WHERE room_code=?", (code,))
+            conn.execute("DELETE FROM participants WHERE room_code=?", (code,))
+            conn.execute("DELETE FROM room_consents WHERE room_code=?", (code,))
+            conn.execute("DELETE FROM rooms WHERE code=?", (code,))
+        else:
+            # 참여자 → 본인만 나가기
+            conn.execute("DELETE FROM participants WHERE room_code=? AND user_id=?", (code, user_id))
+    return {"ok": True}
 
 
 @app.get("/rooms/{code}")
