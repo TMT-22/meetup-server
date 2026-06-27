@@ -21,13 +21,15 @@ def init_db():
             );
 
             CREATE TABLE IF NOT EXISTS user_events (
-                id          TEXT PRIMARY KEY,
-                user_id     TEXT NOT NULL,
-                title       TEXT NOT NULL,
-                date        TEXT NOT NULL,
-                start_hour  INTEGER NOT NULL,
-                end_hour    INTEGER NOT NULL,
-                created_at  TEXT DEFAULT (datetime('now')),
+                id            TEXT PRIMARY KEY,
+                user_id       TEXT NOT NULL,
+                title         TEXT NOT NULL,
+                date          TEXT NOT NULL,
+                start_hour    INTEGER NOT NULL,
+                start_minute  INTEGER NOT NULL DEFAULT 0,
+                end_hour      INTEGER NOT NULL,
+                end_minute    INTEGER NOT NULL DEFAULT 0,
+                created_at    TEXT DEFAULT (datetime('now')),
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
 
@@ -95,7 +97,7 @@ def init_db():
                 created_at  TEXT DEFAULT (datetime('now')),
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
-        """)
+
             CREATE TABLE IF NOT EXISTS push_tokens (
                 user_id     TEXT NOT NULL,
                 token       TEXT NOT NULL,
@@ -105,7 +107,12 @@ def init_db():
             );
         """)
         # 기존 DB 마이그레이션
-        try:
-            conn.execute("ALTER TABLE participants ADD COLUMN accepted INTEGER DEFAULT 1")
-        except Exception:
-            pass
+        for sql in [
+            "ALTER TABLE participants ADD COLUMN accepted INTEGER DEFAULT 1",
+            "ALTER TABLE user_events ADD COLUMN start_minute INTEGER DEFAULT 0",
+            "ALTER TABLE user_events ADD COLUMN end_minute INTEGER DEFAULT 0",
+        ]:
+            try:
+                conn.execute(sql)
+            except Exception:
+                pass

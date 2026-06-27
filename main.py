@@ -53,7 +53,9 @@ class AddEventRequest(BaseModel):
     title: str
     date: str
     start_hour: int
+    start_minute: int = 0
     end_hour: int
+    end_minute: int = 0
 
 class RecurringEventRequest(BaseModel):
     title: str
@@ -252,21 +254,25 @@ def get_friends(user_id: str):
 def get_events(user_id: str):
     with get_conn() as conn:
         rows = conn.execute(
-            "SELECT id, title, date, start_hour, end_hour FROM user_events "
-            "WHERE user_id=? ORDER BY date, start_hour", (user_id,)
+            "SELECT id, title, date, start_hour, start_minute, end_hour, end_minute FROM user_events "
+            "WHERE user_id=? ORDER BY date, start_hour, start_minute", (user_id,)
         ).fetchall()
     return {"events": [dict(r) for r in rows]}
 
 
 @app.post("/users/{user_id}/events", status_code=201)
 def add_event(user_id: str, body: AddEventRequest):
-    if body.start_hour >= body.end_hour:
+    start_total = body.start_hour * 60 + body.start_minute
+    end_total   = body.end_hour   * 60 + body.end_minute
+    if start_total >= end_total:
         raise HTTPException(400, "종료 시간은 시작 시간보다 늦어야 해요.")
     eid = uuid.uuid4().hex
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO user_events (id, user_id, title, date, start_hour, end_hour) VALUES (?,?,?,?,?,?)",
-            (eid, user_id, body.title.strip(), body.date, body.start_hour, body.end_hour)
+            "INSERT INTO user_events (id, user_id, title, date, start_hour, start_minute, end_hour, end_minute) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (eid, user_id, body.title.strip(), body.date,
+             body.start_hour, body.start_minute, body.end_hour, body.end_minute)
         )
     return {"event_id": eid}
 
@@ -670,11 +676,13 @@ def get_free_slots(code: str, user_id: Optional[str] = Query(None)):
 
             # 단일 일정
             events = conn.execute(
-                "SELECT date, start_hour, end_hour FROM user_events WHERE user_id=? AND date >= ? AND date <= ?",
+                "SELECT date, start_hour, start_minute, end_hour, end_minute FROM user_events "
+                "WHERE user_id=? AND date >= ? AND date <= ?",
                 (uid, candidate_dates[0], candidate_dates[-1])
             ).fetchall()
             for ev in events:
-                for h in range(ev["start_hour"], ev["end_hour"]):
+                end_h = ev["end_hour"] + (1 if (ev["end_minute"] or 0) > 0 else 0)
+                for h in range(ev["start_hour"], min(end_h, 23)):
                     busy_set.add((ev["date"], h))
 
             # 반복 일정 (공휴일 제외)
